@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Kobito Room Explorer</title>
+    <title>Kobito Room Physics</title>
     <style> body { margin: 0; overflow: hidden; } </style>
 </head>
 <body>
@@ -19,125 +19,199 @@
     <script type="module">
         import * as THREE from 'three';
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        // ★当たり判定用のライブラリを追加
+        import { Octree } from 'three/addons/math/Octree.js';
+        import { Capsule } from 'three/addons/math/Capsule.js';
 
-        let player = null; 
-        let room = null;
-        const keys = {};  
-
-        // 1. シーン設定
+        // --- 設定 ---
+        const clock = new THREE.Clock(); // 時間管理
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x000000); // 部屋の外は真っ暗闇
-
-        // 2. カメラ（初期位置）
-        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 100);
+        scene.background = new THREE.Color(0x000000);
         
-        // 3. レンダラー
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 100);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.shadowMap.enabled = true;
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        renderer.toneMappingExposure = 1.2; // 室内なので少し明るく
         document.body.appendChild(renderer.domElement);
 
-        // 4. ライト
+        // ライト
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
         scene.add(ambientLight);
-        // プレイヤーの真上に追従するライト（懐中電灯代わり）
         const spotLight = new THREE.SpotLight(0xffffff, 1);
         spotLight.angle = Math.PI / 4;
         spotLight.penumbra = 0.5;
         spotLight.castShadow = true;
         scene.add(spotLight);
 
+        // --- 物理演算の準備 ---
+        const worldOctree = new Octree(); // 壁や床のデータを格納する場所
+        
+        // プレイヤー（カプセル）の設定
+        // 直径0.1m, 高さ0.15m のカプセルを作成（始点, 終点, 半径）
+        const playerCollider = new Capsule(
+            new THREE.Vector3(0, 0.05, 0), 
+            new THREE.Vector3(0, 0.15, 0), 
+            0.05
+        );
+        
+        const playerVelocity = new THREE.Vector3(); // プレイヤーの速度（重力用）
+        const playerDirection = new THREE.Vector3(); // 移動方向
+        let playerOnFloor = false; // 床にいるかどうかの判定
+
+        let playerVisual = null; // 見た目（缶）
+        const keys = {};
+
+        // --- 読み込み ---
         const loader = new GLTFLoader();
 
-        // --- 5. 部屋の読み込み ---
-        loader.load('models/Love_inn.glb', (gltf) => {
-            room = gltf.scene;
+        // 1. 部屋（ステージ）
+        loader.load('models/my_room.glb', (gltf) => {
+            const room = gltf.scene;
             scene.add(room);
-            room.traverse((n) => { 
-                if(n.isMesh) {
-                    n.receiveShadow = true; 
-                    n.castShadow = true;
-                    // ※天井が見えるように「裏面も描画」する設定
-                    if(n.material) n.material.side = THREE.DoubleSide;
+            
+            room.traverse((child) => {
+                if (child.isMesh) {
+                    child.castShadow = true;
+                    child.receiveShadow = true;
+                    if(child.material) child.material.side = THREE.DoubleSide;
                 }
             });
 
-            // ★重要★ ここで部屋の高さを調整します
-            // ScaniverseのデータはY=0が「物体の中心」になりがちなので、床を下げる必要があります。
-            // 実際に動かしてみて、この数値を書き換えるか、キーボードの↑↓で調整してください。
-            room.position.y = -1.5; // とりあえず1.5メートル下げてみる
+            // ★重要：スキャンした部屋を「当たり判定データ」に変換する
+            worldOctree.fromGraphNode(room);
 
         }, undefined, (e) => console.error(e));
 
-        // --- 6. プレイヤー（缶）の読み込み ---
-        loader.load('models/MONSTER_ENERGIE.glb', (gltf) => { 
-            player = gltf.scene; 
-            scene.add(player);
-            player.traverse((n) => { if(n.isMesh) n.castShadow = true; });
-
-            // ★小人化サイズ★
-            // 缶の高さをリアルな「15cm (0.15)」に設定
-            const box = new THREE.Box3().setFromObject(player);
+        // 2. プレイヤー（見た目）
+        loader.load('models/MONSTER_ENERGIE.glb', (gltf) => {
+            playerVisual = gltf.scene;
+            scene.add(playerVisual);
+            
+            // 缶のサイズ調整（高さ15cmくらいに）
+            const box = new THREE.Box3().setFromObject(playerVisual);
             const size = box.getSize(new THREE.Vector3());
             const scale = 0.15 / size.y; 
-            player.scale.set(scale, scale, scale);
+            playerVisual.scale.set(scale, scale, scale);
 
-            player.position.set(0, 0.1, 0); // 地面から少しだけ浮かせる
+            playerVisual.traverse(n => { if(n.isMesh) n.castShadow = true; });
 
         }, undefined, (e) => console.error(e));
 
+        // --- 操作系 ---
         document.addEventListener('keydown', (e) => keys[e.key] = true);
         document.addEventListener('keyup', (e) => keys[e.key] = false);
 
-        // 7. アニメーション
-        function animate() {
-            requestAnimationFrame(animate);
-
-            // 部屋の高さ調整機能（↑↓キーで床の高さを変える）
-            // これで「天井めり込み」を解消してください！
-            if (room) {
-                if (keys['ArrowUp'])   room.position.y -= 0.05; // 部屋を下げる（相対的に自分が上がる）
-                if (keys['ArrowDown']) room.position.y += 0.05; // 部屋を上げる
+        // --- 物理エンジンのメイン処理 ---
+        function updatePlayer(deltaTime) {
+            let damping = Math.exp(-4 * deltaTime) - 1;
+            
+            if (!playerOnFloor) {
+                playerVelocity.y -= 30 * deltaTime; // 重力（空中にいる時）
+                damping *= 0.1; // 空中抵抗
             }
 
-            if (player) {
-                // 小人なので移動スピードは遅く
-                const moveSpeed = 0.03; 
-                const rotateSpeed = 0.04;
+            playerVelocity.addScaledVector(playerVelocity, damping);
+            const deltaPosition = playerVelocity.clone().multiplyScalar(deltaTime);
+            playerCollider.translate(deltaPosition);
 
-                if (keys['a'] || keys['A']) player.rotation.y += rotateSpeed; 
-                if (keys['d'] || keys['D']) player.rotation.y -= rotateSpeed; 
+            // 当たり判定の実行
+            playerCollision();
 
-                if (keys['w'] || keys['W']) {
-                    player.position.x -= Math.sin(player.rotation.y) * moveSpeed;
-                    player.position.z -= Math.cos(player.rotation.y) * moveSpeed;
+            // 見た目（缶）をカプセルの位置に合わせる
+            if (playerVisual) {
+                // カプセルの足元に缶を置く
+                playerVisual.position.copy(playerCollider.start);
+                playerVisual.position.y -= 0.05; // カプセルの半径分下げる
+            }
+        }
+
+        function playerCollision() {
+            // カプセルが世界（Octree）とぶつかっているか計算
+            const result = worldOctree.capsuleIntersect(playerCollider);
+            playerOnFloor = false;
+
+            if (result) {
+                playerOnFloor = result.normal.y > 0;
+                if (!playerOnFloor) {
+                    playerVelocity.addScaledVector(result.normal, -result.normal.dot(playerVelocity));
                 }
-                if (keys['s'] || keys['S']) {
-                    player.position.x += Math.sin(player.rotation.y) * moveSpeed;
-                    player.position.z += Math.cos(player.rotation.y) * moveSpeed;
-                }
+                // 押し戻す処理（これが「壁ずり」を実現する）
+                playerCollider.translate(result.normal.multiplyScalar(result.depth));
+            }
+        }
 
-                // ライトをプレイヤーに追従させる
-                spotLight.position.set(player.position.x, player.position.y + 2, player.position.z);
-                spotLight.target = player;
+        function getForwardVector() {
+            camera.getWorldDirection(playerDirection);
+            playerDirection.y = 0;
+            playerDirection.normalize();
+            return playerDirection;
+        }
 
-                // --- 究極の「小人視点」カメラ ---
-                // 缶の真後ろ、すぐ近くにカメラを置く
-                // 高さ: 0.2m (地面スレスレ), 後ろ: 0.4m
-                const offset = new THREE.Vector3(0, 0.2, 0.4); 
-                offset.applyQuaternion(player.quaternion);
-                offset.add(player.position);
-                
-                // カメラの動きをキビキビさせる（Lerp係数を大きく0.2へ）
+        function getSideVector() {
+            camera.getWorldDirection(playerDirection);
+            playerDirection.y = 0;
+            playerDirection.normalize();
+            playerDirection.cross(camera.up);
+            return playerDirection;
+        }
+
+        function controls(deltaTime) {
+            const speed = playerOnFloor ? 5 : 2; // 地上と空中で速度を変える
+
+            if (keys['w'] || keys['W']) {
+                playerVelocity.add(getForwardVector().multiplyScalar(speed * deltaTime));
+            }
+            if (keys['s'] || keys['S']) {
+                playerVelocity.add(getForwardVector().multiplyScalar(-speed * deltaTime));
+            }
+            if (keys['a'] || keys['A']) {
+                playerVelocity.add(getSideVector().multiplyScalar(-speed * deltaTime));
+            }
+            if (keys['d'] || keys['D']) {
+                playerVelocity.add(getSideVector().multiplyScalar(speed * deltaTime));
+            }
+            
+            // スペースキーでジャンプ！
+            if ((keys[' '] || keys['Space']) && playerOnFloor) {
+                playerVelocity.y = 6; // ジャンプ力
+            }
+
+            // 缶の向きを進行方向に向ける
+            if (playerVisual) {
+                 if (keys['a'] || keys['A']) playerVisual.rotation.y += 0.05;
+                 if (keys['d'] || keys['D']) playerVisual.rotation.y -= 0.05;
+            }
+        }
+
+        // --- アニメーションループ ---
+        function animate() {
+            requestAnimationFrame(animate);
+            const deltaTime = Math.min(0.05, clock.getDelta()); // 時間経過
+
+            // 1. 操作入力を速度に変換
+            controls(deltaTime);
+            
+            // 2. 物理計算（移動＆当たり判定）
+            updatePlayer(deltaTime);
+
+            // 3. カメラ追従（TPS）
+            if (playerVisual) {
+                // プレイヤーの背後にカメラ
+                const offset = new THREE.Vector3(0, 0.2, 0.4);
+                offset.applyQuaternion(playerVisual.quaternion);
+                offset.add(playerVisual.position);
                 camera.position.lerp(offset, 0.2);
                 
-                // プレイヤーの少し前方を見る
-                const lookAtPos = new THREE.Vector3(0, 0.1, -1); // 缶の正面方向
-                lookAtPos.applyQuaternion(player.quaternion);
-                lookAtPos.add(player.position);
+                // プレイヤーを見る
+                const lookAtPos = new THREE.Vector3(0, 0.1, -1); 
+                lookAtPos.applyQuaternion(playerVisual.quaternion);
+                lookAtPos.add(playerVisual.position);
                 camera.lookAt(lookAtPos);
+                
+                // ライト追従
+                spotLight.position.set(playerVisual.position.x, playerVisual.position.y + 2, playerVisual.position.z);
+                spotLight.target = playerVisual;
             }
 
             renderer.render(scene, camera);
