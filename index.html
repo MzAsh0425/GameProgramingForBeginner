@@ -1,77 +1,77 @@
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-    <meta charset="UTF-8">
-    <title>iPhone 17 Pro 3D Viewer</title>
-    <style> body { margin: 0; overflow: hidden; } </style>
-</head>
-<body>
-    <script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
-    <script type="importmap">
-        {
-            "imports": {
-                "three": "https://unpkg.com/three@0.150.0/build/three.module.js",
-                "three/addons/": "https://unpkg.com/three@0.150.0/examples/jsm/"
-            }
-        }
-    </script>
-    <script type="module">
+<script type="module">
         import * as THREE from 'three';
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        // OrbitControlsは使わず、カメラを自動制御します
 
-        // --- 1. グローバル変数の準備 ---
+        // --- 1. グローバル変数 ---
         let model = null; 
         const keys = {};  
 
         // 基本設定
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0xf0f0f0);
+        scene.background = new THREE.Color(0x87CEEB); // 背景を「空の色」に変更
         
+        // 霧（フォグ）を追加して遠近感を出す
+        scene.fog = new THREE.Fog(0x87CEEB, 10, 50);
+
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        camera.position.set(0, 1, 5);
+        // カメラの初期位置は後でモデルに合わせて動かすので適当でOK
 
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
+        // 影を有効にする設定
+        renderer.shadowMap.enabled = true;
         document.body.appendChild(renderer.domElement);
 
-        // ライト
-        const light = new THREE.DirectionalLight(0xffffff, 1);
-        light.position.set(1, 1, 1).normalize();
+        // --- 地面（グリッド）の追加 ---
+        // 100x100の大きさで、地面のガイドラインを表示
+        const gridHelper = new THREE.GridHelper(100, 100);
+        scene.add(gridHelper);
+
+        // 地面そのもの（影を落とす用）
+        const planeGeometry = new THREE.PlaneGeometry(100, 100);
+        const planeMaterial = new THREE.MeshStandardMaterial({ color: 0xdddddd });
+        const plane = new THREE.Mesh(planeGeometry, planeMaterial);
+        plane.rotation.x = -Math.PI / 2; // 寝かせる
+        plane.receiveShadow = true; // 影を受ける
+        scene.add(plane);
+
+        // ライト（影が出るように調整）
+        const light = new THREE.DirectionalLight(0xffffff, 1.2);
+        light.position.set(5, 10, 7);
+        light.castShadow = true; // 影を落とす
         scene.add(light);
         scene.add(new THREE.AmbientLight(0x404040));
-
-        // マウス操作
-        const controls = new OrbitControls(camera, renderer.domElement);
 
         // --- 2. モデルの読み込み ---
         const loader = new GLTFLoader();
         
-        // ★★★注意：ここのファイル名をあなたのものに合わせてください！★★★
-        loader.load('models/MONSTER_ENERGIE.glb', (gltf) => { 
+        // ★★★ここにあなたのファイル名を入れてください★★★
+        loader.load('models/MONSETR_ENERGIE.glb', (gltf) => { 
             model = gltf.scene; 
+            
+            // 影を落とす設定
+            model.traverse((node) => {
+                if (node.isMesh) node.castShadow = true;
+            });
+
             scene.add(model);
 
-            // サイズ調整（自動）
+            // サイズ調整
             const box = new THREE.Box3().setFromObject(model);
-            const center = box.getCenter(new THREE.Vector3());
             const size = box.getSize(new THREE.Vector3());
-            
-            // 中心合わせ
-            model.position.x += (model.position.x - center.x);
-            model.position.y += (model.position.y - center.y);
-            model.position.z += (model.position.z - center.z);
-
-            // サイズ合わせ
             const maxDim = Math.max(size.x, size.y, size.z);
             const scale = 3 / maxDim;
             model.scale.set(scale, scale, scale);
+
+            // 初期位置（地面の上に置く）
+            model.position.y = 1.5; 
 
         }, undefined, (error) => {
             console.error('エラー:', error);
         });
 
-        // --- 3. キーボード入力の監視 ---
+        // --- 3. キーボード入力 ---
         document.addEventListener('keydown', (e) => keys[e.key] = true);
         document.addEventListener('keyup', (e) => keys[e.key] = false);
 
@@ -80,22 +80,41 @@
             requestAnimationFrame(animate);
 
             if (model) {
-                const speed = 0.1; 
-                // W:奥, S:手前, A:左, D:右
-                if (keys['w'] || keys['W']) model.position.z -= speed; 
-                if (keys['s'] || keys['S']) model.position.z += speed; 
-                if (keys['a'] || keys['A']) model.position.x -= speed; 
-                if (keys['d'] || keys['D']) model.position.x += speed; 
+                const moveSpeed = 0.15; 
+                const rotateSpeed = 0.05;
+
+                // 旋回（A/Dキー）
+                if (keys['a'] || keys['A']) model.rotation.y += rotateSpeed; 
+                if (keys['d'] || keys['D']) model.rotation.y -= rotateSpeed; 
+
+                // 前進・後退（W/Sキー）
+                // モデルが向いている方向に進むように計算
+                if (keys['w'] || keys['W']) {
+                    model.position.x -= Math.sin(model.rotation.y) * moveSpeed;
+                    model.position.z -= Math.cos(model.rotation.y) * moveSpeed;
+                }
+                if (keys['s'] || keys['S']) {
+                    model.position.x += Math.sin(model.rotation.y) * moveSpeed;
+                    model.position.z += Math.cos(model.rotation.y) * moveSpeed;
+                }
+
+                // --- ここがポイント：カメラ追従ロジック ---
+                // モデルの後ろ（少し上）にカメラ位置を計算
+                const relativeCameraOffset = new THREE.Vector3(0, 3, 6); // (横, 高さ, 後ろの距離)
                 
-                // 矢印キーで回転
-                if (keys['ArrowLeft']) model.rotation.y += 0.05;
-                if (keys['ArrowRight']) model.rotation.y -= 0.05;
+                // モデルの回転に合わせてオフセットを回転させる
+                const cameraOffset = relativeCameraOffset.applyMatrix4(model.matrixWorld);
+
+                // カメラをその位置に移動（少し滑らかに追従させるとより良いが、まずは直結で）
+                camera.position.x = cameraOffset.x;
+                camera.position.y = cameraOffset.y;
+                camera.position.z = cameraOffset.z;
+
+                // カメラは常にモデルを見る
+                camera.lookAt(model.position);
             }
 
-            controls.update();
             renderer.render(scene, camera);
         }
         animate();
     </script>
-</body>
-</html>
