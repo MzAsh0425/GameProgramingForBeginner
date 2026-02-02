@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>Texture Paint Experiment</title>
+    <style> 
+        body { margin: 0; overflow: hidden; } 
+        #crosshair {
+            position: absolute; top: 50%; left: 50%;
+            width: 20px; height: 20px;
+            background: transparent;
+            border: 2px solid white; border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="crosshair"></div> <script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.150.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.150.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { Octree } from 'three/addons/math/Octree.js';
+        import { Capsule } from 'three/addons/math/Capsule.js';
+
+        // --- ペイント用の設定 ---
+        const INK_COLOR = '#ff00ff'; // マゼンタ色のインク
+        const PAINT_SIZE = 15;       // 筆の太さ
+        const TEXTURE_SIZE = 1024;   // 画用紙のサイズ（大きいほど綺麗だが重い）
+
+        // ペイント用のキャンバス（裏で作る見えない画用紙）
+        const paintCanvas = document.createElement('canvas');
+        paintCanvas.width = TEXTURE_SIZE;
+        paintCanvas.height = TEXTURE_SIZE;
+        const ctx = paintCanvas.getContext('2d');
+        // 背景を透明にする
+        ctx.fillStyle = 'rgba(0,0,0,0)'; 
+        ctx.clearRect(0, 0, TEXTURE_SIZE, TEXTURE_SIZE);
+
+        // Three.js用のテクスチャに変換
+        const paintTexture = new THREE.CanvasTexture(paintCanvas);
+        paintTexture.flipY = false; // GLTFのUVに合わせるため反転無効化
+
+        // -----------------------
+
+        const clock = new THREE.Clock();
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x222222);
+        
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 100);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+        dirLight.position.set(5, 10, 7);
+        scene.add(dirLight);
+
+        // 物理演算用
+        const worldOctree = new Octree();
+        const playerCollider = new Capsule(new THREE.Vector3(0, 0.2, 0), new THREE.Vector3(0, 0.4, 0), 0.2);
+        const playerVelocity = new THREE.Vector3();
+        const playerDirection = new THREE.Vector3();
+        let playerOnFloor = false;
+        let playerVisual = null;
+        let roomMesh = null; // 塗る対象の部屋
+        const keys = {};
+
+        const loader = new GLTFLoader();
+
+        // 1. 部屋の読み込みと「画用紙」の貼り付け
+        loader.load('models/Love_inn.glb', (gltf) => {
+            const room = gltf.scene;
+            scene.add(room);
+
+            room.traverse((child) => {
+                if (child.isMesh) {
+                    // ★重要：部屋のマテリアルに「インク用画用紙」を重ねる
+                    // emissiveMap（発光マップ）として設定することで、元の色の上に光って表示される
+                    child.material = child.material.clone(); // マテリアルを複製（バグ防止）
+                    child.material.emissiveMap = paintTexture;
+                    child.material.emissive = new THREE.Color(0xffffff); // 発光色を白（テクスチャの色そのまま）
+                    child.material.emissiveIntensity = 1.0;
+                    
+                    // ※元のテクスチャが暗くならないように
+                    child.material.map = child.material.map; 
+                    
+                    roomMesh = child; // 塗る対象として記憶（複数のMeshがある場合は工夫が必要）
+                }
+            });
+
+            worldOctree.fromGraphNode(room);
+        });
+
+        loader.load('models/MONSTER_ENERGIE.glb', (gltf) => {
+            playerVisual = gltf.scene;
+            scene.add(playerVisual);
+            const box = new THREE.Box3().setFromObject(playerVisual);
+            const scale = 0.15 / box.getSize(new THREE.Vector3()).y; 
+            playerVisual.scale.set(scale, scale, scale);
+        });
+
+        // --- ペイント処理（クリックで発射） ---
+        const raycaster = new THREE.Raycaster();
+
+        document.addEventListener('mousedown', () => {
+            if (!roomMesh) return;
+
+            // 画面の中央からレイ（光線）を飛ばす
+            raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+
+            // 部屋との衝突判定
+            const intersects = raycaster.intersectObject(roomMesh, true); // trueで子要素も含める
+
+            if (intersects.length > 0) {
+                const hit = intersects[0];
+                const uv = hit.uv; // 当たった場所のUV座標（0.0 〜 1.0）
+
+                if (uv) {
+                    console.log("塗りました！ UV:", uv);
+                    drawSplat(uv.x, uv.y);
+                } else {
+                    console.log("UV座標がありません（塗れない場所）");
+                }
+            }
+        });
+
+        function drawSplat(u, v) {
+            // UV座標(0~1)をキャンバスの画素数(0~1024)に変換
+            const x = u * TEXTURE_SIZE;
+            const y = (1 - v) * TEXTURE_SIZE; // Y軸は上下逆になることが多い
+
+            // キャンバスに円を描く
+            ctx.beginPath();
+            ctx.arc(x, y, PAINT_SIZE, 0, Math.PI * 2);
+            ctx.fillStyle = INK_COLOR;
+            ctx.fill();
+
+            // ランダムな飛び散りを追加
+            for(let i=0; i<5; i++){
+                const rx = x + (Math.random() - 0.5) * 30;
+                const ry = y + (Math.random() - 0.5) * 30;
+                const rSize = Math.random() * 5 + 2;
+                ctx.beginPath();
+                ctx.arc(rx, ry, rSize, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            // テクスチャを更新（これをしないと反映されない）
+            paintTexture.needsUpdate = true;
+        }
+
+        // --- 以下、いつもの移動コード ---
+        document.addEventListener('keydown', (e) => keys[e.key] = true);
+        document.addEventListener('keyup', (e) => keys[e.key] = false);
+
+        function updatePlayer(deltaTime) {
+            let damping = Math.exp(-4 * deltaTime) - 1;
+            if (!playerOnFloor) { playerVelocity.y -= 30 * deltaTime; damping *= 0.1; }
+            playerVelocity.addScaledVector(playerVelocity, damping);
+            playerCollider.translate(playerVelocity.clone().multiplyScalar(deltaTime));
+            playerCollision();
+            if (playerCollider.start.y < -25) {
+                playerCollider.start.set(0, 5, 0);
+                playerCollider.end.set(0, 5.2, 0);
+                playerVelocity.set(0,0,0);
+            }
+        }
+        function playerCollision() {
+            const result = worldOctree.capsuleIntersect(playerCollider);
+            playerOnFloor = false;
+            if (result) {
+                playerOnFloor = result.normal.y > 0;
+                if (!playerOnFloor) playerVelocity.addScaledVector(result.normal, -result.normal.dot(playerVelocity));
+                playerCollider.translate(result.normal.multiplyScalar(result.depth));
+            }
+        }
+        function controls(deltaTime) {
+            const speed = playerOnFloor ? 5 : 2; 
+            if (keys['w'] || keys['W']) playerVelocity.add(getForwardVector().multiplyScalar(speed * deltaTime));
+            if (keys['s'] || keys['S']) playerVelocity.add(getForwardVector().multiplyScalar(-speed * deltaTime));
+            if (keys['a'] || keys['A']) playerVelocity.add(getSideVector().multiplyScalar(-speed * deltaTime));
+            if (keys['d'] || keys['D']) playerVelocity.add(getSideVector().multiplyScalar(speed * deltaTime));
+            if ((keys[' '] || keys['Space']) && playerOnFloor) playerVelocity.y = 6;
+            if (playerVisual) {
+                if (keys['a'] || keys['A']) playerVisual.rotation.y += 0.05;
+                if (keys['d'] || keys['D']) playerVisual.rotation.y -= 0.05;
+            }
+        }
+        function getForwardVector() { camera.getWorldDirection(playerDirection); playerDirection.y = 0; playerDirection.normalize(); return playerDirection; }
+        function getSideVector() { camera.getWorldDirection(playerDirection); playerDirection.y = 0; playerDirection.normalize(); playerDirection.cross(camera.up); return playerDirection; }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const STEPS = 5;
+            const dt = Math.min(0.05, clock.getDelta()) / STEPS;
+            for(let i=0; i<STEPS; i++){ controls(dt); updatePlayer(dt); }
+
+            if (playerVisual) {
+                playerVisual.position.copy(playerCollider.start);
+                playerVisual.position.y -= 0.2; 
+                const offset = new THREE.Vector3(0, 0.3, 0.6);
+                offset.applyQuaternion(playerVisual.quaternion);
+                offset.add(playerVisual.position);
+                camera.position.lerp(offset, 0.2);
+                const lookAtPos = new THREE.Vector3(0, 0, -1); 
+                lookAtPos.applyQuaternion(playerVisual.quaternion);
+                lookAtPos.add(playerVisual.position);
+                camera.lookAt(lookAtPos);
+            }
+            renderer.render(scene, camera);
+        }
+        animate();
+    </script>
+</body>
+</html>
