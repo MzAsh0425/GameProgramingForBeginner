@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Monster Drive Final</title>
+    <title>Monster World</title>
     <style> body { margin: 0; overflow: hidden; } </style>
 </head>
 <body>
@@ -19,59 +19,135 @@
     <script type="module">
         import * as THREE from 'three';
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { Sky } from 'three/addons/objects/Sky.js'; // ★空を作るライブラリを追加
 
         let model = null; 
         const keys = {};  
 
         // 1. シーン設定
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x87CEEB); 
-        scene.fog = new THREE.Fog(0x87CEEB, 10, 100); // 霧を少し奥にしました
+        // 背景色はSkyが上書きするので指定しなくてOK
 
-        // 2. カメラ（初期位置を安全な場所に）
+        // 2. カメラ
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         camera.position.set(0, 5, 10); 
 
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.shadowMap.enabled = true;
+        // リアルな色味にする設定（トーンマッピング）
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 0.5;
         document.body.appendChild(renderer.domElement);
 
-        // 床とグリッド
-        const plane = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.MeshStandardMaterial({ color: 0xdddddd }));
+        // --- 3. 環境作り（空と太陽） ---
+        const sky = new Sky();
+        sky.scale.setScalar(450000); // 空を巨大にする
+        scene.add(sky);
+
+        const sun = new THREE.Vector3();
+
+        // 空の見た目を調整する関数
+        const effectController = {
+            turbidity: 10,  // 濁り
+            rayleigh: 3,    // 散乱（夕焼け具合）
+            mieCoefficient: 0.005,
+            mieDirectionalG: 0.7,
+            elevation: 2,   // 太陽の高さ（低いと夕方）
+            azimuth: 180,   // 太陽の方角
+            exposure: renderer.toneMappingExposure
+        };
+
+        function updateSun() {
+            const uniforms = sky.material.uniforms;
+            uniforms['turbidity'].value = effectController.turbidity;
+            uniforms['rayleigh'].value = effectController.rayleigh;
+            uniforms['mieCoefficient'].value = effectController.mieCoefficient;
+            uniforms['mieDirectionalG'].value = effectController.mieDirectionalG;
+
+            const phi = THREE.MathUtils.degToRad(90 - effectController.elevation);
+            const theta = THREE.MathUtils.degToRad(effectController.azimuth);
+
+            sun.setFromSphericalCoords(1, phi, theta);
+
+            uniforms['sunPosition'].value.copy(sun);
+            renderer.toneMappingExposure = effectController.exposure;
+            
+            // 太陽の位置に合わせてライトも動かす
+            dirLight.position.copy(sun).multiplyScalar(10);
+        }
+
+        // --- 4. 床と障害物 ---
+        // 床（少し暗めのアスファルト風）
+        const plane = new THREE.Mesh(
+            new THREE.PlaneGeometry(500, 500), 
+            new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.8 })
+        );
         plane.rotation.x = -Math.PI / 2;
         plane.receiveShadow = true;
         scene.add(plane);
-        scene.add(new THREE.GridHelper(200, 200));
+        
+        // グリッド（薄く表示）
+        const grid = new THREE.GridHelper(500, 100, 0x555555, 0x444444);
+        scene.add(grid);
 
-        const light = new THREE.DirectionalLight(0xffffff, 1.2);
-        light.position.set(5, 10, 7);
-        light.castShadow = true;
-        scene.add(light);
-        scene.add(new THREE.AmbientLight(0x606060));
+        // ランダムなビル（ただの箱）を配置して広さを演出
+        const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+        const boxMat = new THREE.MeshStandardMaterial({ color: 0x888888 });
+        
+        for (let i = 0; i < 50; i++) {
+            const box = new THREE.Mesh(boxGeo, boxMat);
+            // ランダムな位置（中央付近は空ける）
+            const x = (Math.random() - 0.5) * 200;
+            const z = (Math.random() - 0.5) * 200;
+            if (Math.abs(x) < 10 && Math.abs(z) < 10) continue; // スタート地点には置かない
 
-        // 3. モデル読み込み
+            box.position.set(x, 0, z);
+            
+            // ランダムな大きさ（ビルっぽく）
+            const h = Math.random() * 10 + 2; // 高さ2〜12m
+            box.scale.set(Math.random() * 5 + 2, h, Math.random() * 5 + 2);
+            box.position.y = h / 2; // 地面に接するように持ち上げる
+            
+            box.castShadow = true;
+            box.receiveShadow = true;
+            scene.add(box);
+        }
+
+        // 5. ライト（太陽光）
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+        dirLight.castShadow = true;
+        dirLight.shadow.mapSize.width = 2048; // 影をきれいに
+        dirLight.shadow.mapSize.height = 2048;
+        dirLight.shadow.camera.top = 50;
+        dirLight.shadow.camera.bottom = -50;
+        dirLight.shadow.camera.left = -50;
+        dirLight.shadow.camera.right = 50;
+        scene.add(dirLight);
+        scene.add(new THREE.AmbientLight(0x404040));
+
+        // 空の初期化実行
+        updateSun();
+
+        // 6. モデル読み込み
         const loader = new GLTFLoader();
-        // ★ファイル名の確認をお願いします
         loader.load('models/MONSTER_ENERGIE.glb', (gltf) => { 
             model = gltf.scene; 
             scene.add(model);
-            
             model.traverse((n) => { if(n.isMesh) n.castShadow = true; });
 
-            // 位置合わせ
+            // 位置とサイズ調整
             const box = new THREE.Box3().setFromObject(model);
             const size = box.getSize(new THREE.Vector3());
             const center = box.getCenter(new THREE.Vector3());
-
+            
             model.position.x += (model.position.x - center.x);
             model.position.y += (model.position.y - center.y);
             model.position.z += (model.position.z - center.z);
-
+            
             const scale = 3 / size.y; 
             model.scale.set(scale, scale, scale);
 
-            // 再計算して着地
             const box2 = new THREE.Box3().setFromObject(model);
             model.position.y -= box2.min.y;
 
@@ -79,16 +155,17 @@
             console.error(error);
         });
 
+        // キー操作設定
         document.addEventListener('keydown', (e) => keys[e.key] = true);
         document.addEventListener('keyup', (e) => keys[e.key] = false);
 
-        // 4. アニメーション
+        // 7. アニメーション
         function animate() {
             requestAnimationFrame(animate);
 
             if (model) {
-                const moveSpeed = 0.15; 
-                const rotateSpeed = 0.05;
+                const moveSpeed = 0.2; 
+                const rotateSpeed = 0.04;
 
                 if (keys['a'] || keys['A']) model.rotation.y += rotateSpeed; 
                 if (keys['d'] || keys['D']) model.rotation.y -= rotateSpeed; 
@@ -102,22 +179,11 @@
                     model.position.z += Math.cos(model.rotation.y) * moveSpeed;
                 }
 
-                // --- 修正版カメラ追従ロジック ---
-                // モデルの「回転」だけを計算に使う（スケールは無視）
-                
-                // 1. カメラが居てほしい場所（モデルから見て 後ろ8m, 高さ4m）
+                // 追従カメラ
                 const offset = new THREE.Vector3(0, 4, 8); 
-                
-                // 2. その場所をモデルの向きに合わせて回転させる
                 offset.applyQuaternion(model.quaternion);
-                
-                // 3. モデルの現在位置に足す
                 offset.add(model.position);
-
-                // 4. カメラをそこに移動
                 camera.position.lerp(offset, 0.1);
-                
-                // 5. カメラはモデルを見る（少し上を見るように調整）
                 camera.lookAt(model.position.x, model.position.y + 2, model.position.z);
             }
 
