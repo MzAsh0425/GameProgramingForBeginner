@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Splatoon Fix: Normals</title>
+    <title>Splatoon: Mouse Aim</title>
     <style> 
         body { margin: 0; overflow: hidden; } 
         #crosshair {
@@ -23,7 +23,11 @@
 </head>
 <body>
     <div id="crosshair"></div>
-    <div id="info">修正完了：インク発射！</div>
+    <div id="info">
+        <b>画面をクリックして操作開始</b><br>
+        マウス: 視点移動 / クリック: インク発射<br>
+        WASD: 移動 / SPACE: ジャンプ / ESC: 中断
+    </div>
     
     <script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
     <script type="importmap">
@@ -41,6 +45,11 @@
         import { Octree } from 'three/addons/math/Octree.js';
         import { Capsule } from 'three/addons/math/Capsule.js';
         import { DecalGeometry } from 'three/addons/geometries/DecalGeometry.js';
+
+        // --- マウス操作用の変数 ---
+        let isLocked = false; // マウスがロックされているか
+        let cameraRotation = { x: 0, y: Math.PI }; // カメラの角度（Yは初期向き）
+        const MOUSE_SENSITIVITY = 0.002; // ★ここで回転スピードを微調整できます
 
         // インク設定
         const decalMaterial = new THREE.MeshPhongMaterial({ 
@@ -72,7 +81,6 @@
         const decalTexture = new THREE.CanvasTexture(canvas);
         decalMaterial.map = decalTexture;
 
-        // シーン設定
         const clock = new THREE.Clock();
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x222222);
@@ -100,25 +108,19 @@
 
         const loader = new GLTFLoader();
 
-        // 1. 部屋読み込み（★ここが修正のキモです！）
         loader.load('models/Love_inn.glb', (gltf) => {
             roomGroup = gltf.scene;
             scene.add(roomGroup);
-
-            // 部屋の全パーツをチェックして、足りないデータを補完する
             roomGroup.traverse((child) => {
                 if (child.isMesh) {
-                    // ★重要：法線（Normal）がない場合、自動計算する
                     if (!child.geometry.attributes.normal) {
                         child.geometry.computeVertexNormals();
                     }
                 }
             });
-
             worldOctree.fromGraphNode(roomGroup);
         });
 
-        // 2. プレイヤー
         loader.load('models/MONSTER_ENERGIE.glb', (gltf) => {
             playerVisual = gltf.scene;
             scene.add(playerVisual);
@@ -127,13 +129,36 @@
             playerVisual.scale.set(scale, scale, scale);
         });
 
+        // --- ★マウスロック機能 ---
+        document.body.addEventListener('click', () => {
+            document.body.requestPointerLock();
+        });
+
+        document.addEventListener('pointerlockchange', () => {
+            isLocked = (document.pointerLockElement === document.body);
+        });
+
+        // --- ★マウス移動イベント（視点操作） ---
+        document.addEventListener('mousemove', (event) => {
+            if (!isLocked) return;
+
+            // 横回転（Y軸）
+            cameraRotation.y -= event.movementX * MOUSE_SENSITIVITY;
+
+            // 縦回転（X軸）※制限付き
+            cameraRotation.x -= event.movementY * MOUSE_SENSITIVITY;
+            // 真上・真下を見すぎて首が折れないように制限 (-90度〜90度)
+            cameraRotation.x = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, cameraRotation.x));
+        });
+
         // --- インク発射 ---
         const raycaster = new THREE.Raycaster();
         const mouseHelper = new THREE.Object3D(); 
 
         document.addEventListener('mousedown', (event) => {
-            if (!roomGroup) return;
+            if (!isLocked || !roomGroup) return; // ロック中のみ発射
 
+            // 画面中央から発射
             raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
             const intersects = raycaster.intersectObject(roomGroup, true);
 
@@ -146,18 +171,17 @@
         });
 
         function shootInk(hit) {
-            const position = hit.point;
-            const normal = hit.face.normal.clone(); 
-            normal.transformDirection(hit.object.matrixWorld);
-
-            mouseHelper.position.copy(position);
-            mouseHelper.lookAt(position.clone().add(normal));
-            mouseHelper.rotateZ(Math.random() * Math.PI * 2);
-
-            const size = Math.random() * 0.3 + 0.2; 
-
-            // ここでエラーが出ていたが、上の修正により直るはず
             try {
+                const position = hit.point;
+                const normal = hit.face.normal.clone(); 
+                normal.transformDirection(hit.object.matrixWorld);
+
+                mouseHelper.position.copy(position);
+                mouseHelper.lookAt(position.clone().add(normal));
+                mouseHelper.rotateZ(Math.random() * Math.PI * 2);
+
+                const size = Math.random() * 0.3 + 0.2; 
+
                 const geometry = new DecalGeometry(
                     hit.object, 
                     position, 
@@ -172,11 +196,11 @@
                 scene.add(m);
                 decals.push(m);
             } catch (e) {
-                console.error("デカール作成エラー:", e);
+                console.error(e);
             }
         }
 
-        // --- 移動 ---
+        // --- 移動処理 ---
         document.addEventListener('keydown', (e) => keys[e.key] = true);
         document.addEventListener('keyup', (e) => keys[e.key] = false);
 
@@ -203,6 +227,21 @@
                 playerCollider.translate(result.normal.multiplyScalar(result.depth));
             }
         }
+
+        // ★移動方向の計算をカメラ向きに合わせる
+        function getForwardVector() {
+            const v = new THREE.Vector3();
+            // カメラの向いている水平方向を取得
+            v.set(Math.sin(cameraRotation.y), 0, Math.cos(cameraRotation.y));
+            return v.normalize().negate(); // 逆になっていたので反転
+        }
+        function getSideVector() {
+            const v = new THREE.Vector3();
+            v.set(Math.sin(cameraRotation.y), 0, Math.cos(cameraRotation.y));
+            v.cross(THREE.Object3D.DefaultUp); // 右方向
+            return v.normalize().negate();
+        }
+
         function controls(deltaTime) {
             const speed = playerOnFloor ? 5 : 2; 
             if (keys['w'] || keys['W']) playerVelocity.add(getForwardVector().multiplyScalar(speed * deltaTime));
@@ -210,13 +249,7 @@
             if (keys['a'] || keys['A']) playerVelocity.add(getSideVector().multiplyScalar(-speed * deltaTime));
             if (keys['d'] || keys['D']) playerVelocity.add(getSideVector().multiplyScalar(speed * deltaTime));
             if ((keys[' '] || keys['Space']) && playerOnFloor) playerVelocity.y = 6;
-            if (playerVisual) {
-                if (keys['a'] || keys['A']) playerVisual.rotation.y += 0.05;
-                if (keys['d'] || keys['D']) playerVisual.rotation.y -= 0.05;
-            }
         }
-        function getForwardVector() { camera.getWorldDirection(playerDirection); playerDirection.y = 0; playerDirection.normalize(); return playerDirection; }
-        function getSideVector() { camera.getWorldDirection(playerDirection); playerDirection.y = 0; playerDirection.normalize(); playerDirection.cross(camera.up); return playerDirection; }
 
         function animate() {
             requestAnimationFrame(animate);
@@ -225,16 +258,36 @@
             for(let i=0; i<STEPS; i++){ controls(dt); updatePlayer(dt); }
 
             if (playerVisual) {
+                // 1. プレイヤーの位置更新
                 playerVisual.position.copy(playerCollider.start);
                 playerVisual.position.y -= 0.2; 
-                const offset = new THREE.Vector3(0, 0.3, 0.6);
-                offset.applyQuaternion(playerVisual.quaternion);
-                offset.add(playerVisual.position);
-                camera.position.lerp(offset, 0.2);
-                const lookAtPos = new THREE.Vector3(0, 0, -1); 
-                lookAtPos.applyQuaternion(playerVisual.quaternion);
-                lookAtPos.add(playerVisual.position);
-                camera.lookAt(lookAtPos);
+                
+                // 2. プレイヤーの向きをカメラの水平回転に合わせる
+                // (缶は常に正面＝カメラ方向を向く)
+                playerVisual.rotation.y = cameraRotation.y + Math.PI; 
+
+                // 3. カメラ位置の計算 (球座標)
+                // プレイヤーを中心にして、回転角度に応じた位置にカメラを置く
+                const cameraDist = 0.6; // 距離
+                const cameraHeight = 0.3; // 基準の高さ
+
+                // カメラのオフセット計算
+                // X軸回転(Pitch)で高さを、Y軸回転(Yaw)で水平位置を決める
+                const offsetX = Math.sin(cameraRotation.y) * cameraDist * Math.cos(cameraRotation.x);
+                const offsetZ = Math.cos(cameraRotation.y) * cameraDist * Math.cos(cameraRotation.x);
+                const offsetY = Math.sin(cameraRotation.x) * cameraDist;
+
+                camera.position.x = playerVisual.position.x - offsetX;
+                camera.position.z = playerVisual.position.z - offsetZ;
+                camera.position.y = playerVisual.position.y + cameraHeight - offsetY;
+
+                // 4. カメラはプレイヤーの少し先を見る
+                // これにより、常にクロスヘアの中心が狙える
+                camera.lookAt(
+                    playerVisual.position.x + offsetX * 10,
+                    playerVisual.position.y + cameraHeight + offsetY * 10,
+                    playerVisual.position.z + offsetZ * 10
+                );
             }
             renderer.render(scene, camera);
         }
