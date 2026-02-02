@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Rescue Mission: Love Inn</title>
+    <title>Physics Fix: Love Inn</title>
     <style> 
         body { margin: 0; overflow: hidden; } 
         #info {
@@ -16,9 +16,9 @@
 </head>
 <body>
     <div id="info">
+        <b>【落下対策済みバージョン】</b><br>
         WASD: 移動 / SPACE: ジャンプ<br>
-        <b>Rキー: リセット（上空に戻る）</b><br>
-        緑の線（部屋）を目指して降下してください
+        Rキー: リセット
     </div>
 
     <script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
@@ -40,7 +40,7 @@
 
         const clock = new THREE.Clock();
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x222222); // 暗いグレー（宇宙空間的な）
+        scene.background = new THREE.Color(0x222222);
         
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 100);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -48,30 +48,30 @@
         renderer.shadowMap.enabled = true;
         document.body.appendChild(renderer.domElement);
 
-        // --- ライト設定（修正箇所） ---
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
         scene.add(ambientLight);
-
         const dirLight = new THREE.DirectionalLight(0xffffff, 1);
         dirLight.position.set(5, 10, 7);
         dirLight.castShadow = true;
         scene.add(dirLight);
 
-        // ★前回忘れていたスポットライトを追加（これでエラーが消えます）
         const spotLight = new THREE.SpotLight(0xffffff, 2);
         spotLight.angle = Math.PI / 4;
         spotLight.penumbra = 0.5;
         spotLight.castShadow = true;
         scene.add(spotLight);
 
-        // --- 物理演算 ---
+        // --- 物理設定 ---
         const worldOctree = new Octree();
-        const startPosition = new THREE.Vector3(0, 10, 0); // 高さ10mからスタート
+        const startPosition = new THREE.Vector3(0, 5, 0); // スタート地点
 
+        // ★対策1：カプセルを太くする
+        // 半径(radius)を 0.05 -> 0.20 (4倍) に変更
+        // これで小さな穴やメッシュの隙間に落ちなくなります
         const playerCollider = new Capsule(
-            new THREE.Vector3(0, 10.05, 0), 
-            new THREE.Vector3(0, 10.15, 0), 
-            0.05
+            new THREE.Vector3(0, 0.2, 0), 
+            new THREE.Vector3(0, 0.4, 0), 
+            0.20
         );
         
         const playerVelocity = new THREE.Vector3();
@@ -80,13 +80,12 @@
         let playerVisual = null;
         const keys = {};
 
+        // --- 読み込み ---
         const loader = new GLTFLoader();
 
-        // 1. 部屋（Love_inn.glb）
-        loader.load('models/Love_inn.glb', (gltf) => { // ★ファイル名を変更済み
+        loader.load('models/Love_inn.glb', (gltf) => {
             const room = gltf.scene;
             scene.add(room);
-            
             room.traverse((child) => {
                 if (child.isMesh) {
                     child.castShadow = true;
@@ -94,26 +93,23 @@
                     if(child.material) child.material.side = THREE.DoubleSide;
                 }
             });
-
             worldOctree.fromGraphNode(room);
 
-            // 緑の枠線を表示
+            // 緑の線（デバッグ用）はもう邪魔ならコメントアウトしてもOK
             const helper = new OctreeHelper(worldOctree);
             helper.visible = true;
             scene.add(helper);
-
         }, undefined, (e) => console.error(e));
 
-        // 2. プレイヤー（MONSTER）
         loader.load('models/MONSTER_ENERGIE.glb', (gltf) => {
             playerVisual = gltf.scene;
             scene.add(playerVisual);
             
             const box = new THREE.Box3().setFromObject(playerVisual);
             const size = box.getSize(new THREE.Vector3());
+            // 見た目は小さいまま（0.15m）
             const scale = 0.15 / size.y; 
             playerVisual.scale.set(scale, scale, scale);
-
             playerVisual.traverse(n => { if(n.isMesh) n.castShadow = true; });
 
         }, undefined, (e) => console.error(e));
@@ -126,7 +122,7 @@
 
         function resetPlayer() {
             playerCollider.start.copy(startPosition);
-            playerCollider.end.copy(startPosition).add(new THREE.Vector3(0, 0.15, 0));
+            playerCollider.end.copy(startPosition).add(new THREE.Vector3(0, 0.2, 0)); // 高さ合わせ
             playerVelocity.set(0, 0, 0);
         }
 
@@ -147,14 +143,10 @@
             if (playerCollider.start.y < -25) {
                 resetPlayer();
             }
-
-            if (playerVisual) {
-                playerVisual.position.copy(playerCollider.start);
-                playerVisual.position.y -= 0.05;
-            }
         }
 
         function playerCollision() {
+            // ここで当たり判定を行う回数が増える
             const result = worldOctree.capsuleIntersect(playerCollider);
             playerOnFloor = false;
             if (result) {
@@ -182,7 +174,6 @@
 
         function controls(deltaTime) {
             const speed = playerOnFloor ? 5 : 2; 
-
             if (keys['w'] || keys['W']) playerVelocity.add(getForwardVector().multiplyScalar(speed * deltaTime));
             if (keys['s'] || keys['S']) playerVelocity.add(getForwardVector().multiplyScalar(-speed * deltaTime));
             if (keys['a'] || keys['A']) playerVelocity.add(getSideVector().multiplyScalar(-speed * deltaTime));
@@ -197,11 +188,26 @@
 
         function animate() {
             requestAnimationFrame(animate);
-            const deltaTime = Math.min(0.05, clock.getDelta());
-            controls(deltaTime);
-            updatePlayer(deltaTime);
+            
+            // ★対策2：サブステップ処理
+            // 1フレームの時間を「5分割」して、5回計算する。
+            // これにより、高速で動いても壁をすり抜ける隙を与えない。
+            const STEPS_PER_FRAME = 5;
+            const deltaTime = Math.min(0.05, clock.getDelta()) / STEPS_PER_FRAME;
 
+            for (let i = 0; i < STEPS_PER_FRAME; i++) {
+                controls(deltaTime);
+                updatePlayer(deltaTime);
+            }
+
+            // 描画（レンダリング）は最後に1回だけ
             if (playerVisual) {
+                // 見た目（缶）を当たり判定（カプセル）の位置に合わせる
+                playerVisual.position.copy(playerCollider.start);
+                // カプセルが太くなったので、見た目の位置調整も少し変更
+                playerVisual.position.y -= 0.2; 
+
+                // カメラ追従
                 const offset = new THREE.Vector3(0, 0.3, 0.6);
                 offset.applyQuaternion(playerVisual.quaternion);
                 offset.add(playerVisual.position);
@@ -212,7 +218,6 @@
                 lookAtPos.add(playerVisual.position);
                 camera.lookAt(lookAtPos);
                 
-                // ★修正箇所：ここで spotLight を使ってもエラーにならなくなりました
                 spotLight.position.set(playerVisual.position.x, playerVisual.position.y + 2, playerVisual.position.z);
                 spotLight.target = playerVisual;
             }
