@@ -1,7 +1,8 @@
+<!DOCTYPE html>
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>iPhone 17 Pro 3D Viewer</title>
+    <title>Debug Mode</title>
     <style> body { margin: 0; overflow: hidden; } </style>
 </head>
 <body>
@@ -14,123 +15,82 @@
             }
         }
     </script>
-        <script type="module">
+
+    <script type="module">
         import * as THREE from 'three';
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-        // OrbitControlsは使わず、カメラを自動制御します
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-        // --- 1. グローバル変数 ---
         let model = null; 
-        const keys = {};  
 
-        // 基本設定
+        // 1. シーン設定
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x87CEEB); // 背景を「空の色」に変更
-        
-        // 霧（フォグ）を追加して遠近感を出す
-        scene.fog = new THREE.Fog(0x87CEEB, 10, 50);
+        scene.background = new THREE.Color(0x87CEEB); // 水色
+        scene.add(new THREE.GridHelper(100, 100));    // 地面グリッド
 
+        // 2. カメラ（少し遠く、上から見下ろす）
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        // カメラの初期位置は後でモデルに合わせて動かすので適当でOK
+        camera.position.set(0, 5, 10); // 手前・上に配置
 
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
-        // 影を有効にする設定
-        renderer.shadowMap.enabled = true;
         document.body.appendChild(renderer.domElement);
 
-        // --- 地面（グリッド）の追加 ---
-        // 100x100の大きさで、地面のガイドラインを表示
-        const gridHelper = new THREE.GridHelper(100, 100);
-        scene.add(gridHelper);
-
-        // 地面そのもの（影を落とす用）
-        const planeGeometry = new THREE.PlaneGeometry(100, 100);
-        const planeMaterial = new THREE.MeshStandardMaterial({ color: 0xdddddd });
-        const plane = new THREE.Mesh(planeGeometry, planeMaterial);
-        plane.rotation.x = -Math.PI / 2; // 寝かせる
-        plane.receiveShadow = true; // 影を受ける
-        scene.add(plane);
-
-        // ライト（影が出るように調整）
-        const light = new THREE.DirectionalLight(0xffffff, 1.2);
+        const light = new THREE.DirectionalLight(0xffffff, 1.5);
         light.position.set(5, 10, 7);
-        light.castShadow = true; // 影を落とす
         scene.add(light);
-        scene.add(new THREE.AmbientLight(0x404040));
+        scene.add(new THREE.AmbientLight(0x606060));
 
-        // --- 2. モデルの読み込み ---
+        // 3. マウス操作（これで探せます）
+        const controls = new OrbitControls(camera, renderer.domElement);
+
+        // 4. モデル読み込み
         const loader = new GLTFLoader();
-        
-        // ★★★ここにあなたのファイル名を入れてください★★★
+        // ★ファイル名は前回の成功したものを維持してください
         loader.load('models/MONSTER_ENERGIE.glb', (gltf) => { 
             model = gltf.scene; 
-            
-            // 影を落とす設定
-            model.traverse((node) => {
-                if (node.isMesh) node.castShadow = true;
-            });
-
             scene.add(model);
 
-            // サイズ調整
+            // --- デバッグ機能：赤い枠線を表示 ---
+            // モデルが透明でも、極小でも、この赤い箱なら見えるはずです
+            const boxHelper = new THREE.BoxHelper(model, 0xff0000);
+            scene.add(boxHelper);
+
+            // --- サイズ調整と位置合わせ ---
             const box = new THREE.Box3().setFromObject(model);
             const size = box.getSize(new THREE.Vector3());
+            const center = box.getCenter(new THREE.Vector3());
+
+            console.log("モデルのサイズ:", size); // コンソールでサイズ確認可能
+            console.log("モデルの中心:", center);
+
+            // 中心を原点に持ってくる（ズレ補正）
+            model.position.x += (model.position.x - center.x);
+            model.position.y += (model.position.y - center.y);
+            model.position.z += (model.position.z - center.z);
+            
+            // 床の上に載せる（Y軸調整）
+            model.position.y += size.y / 2;
+
+            // 大きすぎる/小さすぎる場合のリサイズ
+            // どんなサイズでも高さ「3」くらいに揃える
             const maxDim = Math.max(size.x, size.y, size.z);
             const scale = 3 / maxDim;
             model.scale.set(scale, scale, scale);
 
-            // 初期位置（地面の上に置く）
-            model.position.y = 1.5; 
+            // 更新された位置で枠線を再描画
+            boxHelper.update();
 
         }, undefined, (error) => {
             console.error('エラー:', error);
         });
 
-        // --- 3. キーボード入力 ---
-        document.addEventListener('keydown', (e) => keys[e.key] = true);
-        document.addEventListener('keyup', (e) => keys[e.key] = false);
-
-        // --- 4. アニメーションループ ---
         function animate() {
             requestAnimationFrame(animate);
-
-            if (model) {
-                const moveSpeed = 0.15; 
-                const rotateSpeed = 0.05;
-
-                // 旋回（A/Dキー）
-                if (keys['a'] || keys['A']) model.rotation.y += rotateSpeed; 
-                if (keys['d'] || keys['D']) model.rotation.y -= rotateSpeed; 
-
-                // 前進・後退（W/Sキー）
-                // モデルが向いている方向に進むように計算
-                if (keys['w'] || keys['W']) {
-                    model.position.x -= Math.sin(model.rotation.y) * moveSpeed;
-                    model.position.z -= Math.cos(model.rotation.y) * moveSpeed;
-                }
-                if (keys['s'] || keys['S']) {
-                    model.position.x += Math.sin(model.rotation.y) * moveSpeed;
-                    model.position.z += Math.cos(model.rotation.y) * moveSpeed;
-                }
-
-                // --- ここがポイント：カメラ追従ロジック ---
-                // モデルの後ろ（少し上）にカメラ位置を計算
-                const relativeCameraOffset = new THREE.Vector3(0, 3, 6); // (横, 高さ, 後ろの距離)
-                
-                // モデルの回転に合わせてオフセットを回転させる
-                const cameraOffset = relativeCameraOffset.applyMatrix4(model.matrixWorld);
-
-                // カメラをその位置に移動（少し滑らかに追従させるとより良いが、まずは直結で）
-                camera.position.x = cameraOffset.x;
-                camera.position.y = cameraOffset.y;
-                camera.position.z = cameraOffset.z;
-
-                // カメラは常にモデルを見る
-                camera.lookAt(model.position);
-            }
-
+            controls.update();
             renderer.render(scene, camera);
         }
         animate();
     </script>
+</body>
+</html>
