@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Room Rescue Mode</title>
+    <title>Rescue Mission: Love Inn</title>
     <style> 
         body { margin: 0; overflow: hidden; } 
         #info {
@@ -10,14 +10,15 @@
             top: 10px; left: 10px;
             color: white; font-family: sans-serif;
             background: rgba(0,0,0,0.5); padding: 10px;
+            pointer-events: none;
         }
     </style>
 </head>
 <body>
     <div id="info">
         WASD: 移動 / SPACE: ジャンプ<br>
-        <b>Rキー: スタート地点（上空）に戻る</b><br>
-        緑の線が見える場所に着地してください
+        <b>Rキー: リセット（上空に戻る）</b><br>
+        緑の線（部屋）を目指して降下してください
     </div>
 
     <script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
@@ -34,12 +35,12 @@
         import * as THREE from 'three';
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         import { Octree } from 'three/addons/math/Octree.js';
-        import { OctreeHelper } from 'three/addons/helpers/OctreeHelper.js'; // ★可視化ツール
+        import { OctreeHelper } from 'three/addons/helpers/OctreeHelper.js';
         import { Capsule } from 'three/addons/math/Capsule.js';
 
         const clock = new THREE.Clock();
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x222222); // 暗いグレー
+        scene.background = new THREE.Color(0x222222); // 暗いグレー（宇宙空間的な）
         
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 100);
         const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -47,17 +48,25 @@
         renderer.shadowMap.enabled = true;
         document.body.appendChild(renderer.domElement);
 
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+        // --- ライト設定（修正箇所） ---
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
         scene.add(ambientLight);
+
         const dirLight = new THREE.DirectionalLight(0xffffff, 1);
         dirLight.position.set(5, 10, 7);
+        dirLight.castShadow = true;
         scene.add(dirLight);
+
+        // ★前回忘れていたスポットライトを追加（これでエラーが消えます）
+        const spotLight = new THREE.SpotLight(0xffffff, 2);
+        spotLight.angle = Math.PI / 4;
+        spotLight.penumbra = 0.5;
+        spotLight.castShadow = true;
+        scene.add(spotLight);
 
         // --- 物理演算 ---
         const worldOctree = new Octree();
-        
-        // ★初期位置を「上空10メートル」に設定 (Y=10)
-        const startPosition = new THREE.Vector3(0, 10, 0);
+        const startPosition = new THREE.Vector3(0, 10, 0); // 高さ10mからスタート
 
         const playerCollider = new Capsule(
             new THREE.Vector3(0, 10.05, 0), 
@@ -73,8 +82,8 @@
 
         const loader = new GLTFLoader();
 
-        // 1. 部屋の読み込み
-        loader.load('modelsLove_inn.glb', (gltf) => {
+        // 1. 部屋（Love_inn.glb）
+        loader.load('models/Love_inn.glb', (gltf) => { // ★ファイル名を変更済み
             const room = gltf.scene;
             scene.add(room);
             
@@ -86,18 +95,16 @@
                 }
             });
 
-            // 当たり判定の生成
             worldOctree.fromGraphNode(room);
 
-            // ★デバッグ機能：当たり判定（床）を緑色のワイヤーフレームで表示
-            // これで「どこに着地できるか」が見えます
+            // 緑の枠線を表示
             const helper = new OctreeHelper(worldOctree);
             helper.visible = true;
             scene.add(helper);
 
         }, undefined, (e) => console.error(e));
 
-        // 2. プレイヤー
+        // 2. プレイヤー（MONSTER）
         loader.load('models/MONSTER_ENERGIE.glb', (gltf) => {
             playerVisual = gltf.scene;
             scene.add(playerVisual);
@@ -107,21 +114,20 @@
             const scale = 0.15 / size.y; 
             playerVisual.scale.set(scale, scale, scale);
 
+            playerVisual.traverse(n => { if(n.isMesh) n.castShadow = true; });
+
         }, undefined, (e) => console.error(e));
 
-        // 操作系
         document.addEventListener('keydown', (e) => {
             keys[e.key] = true;
-            // Rキーでリセット
             if (e.key === 'r' || e.key === 'R') resetPlayer();
         });
         document.addEventListener('keyup', (e) => keys[e.key] = false);
 
-        // ★リスポーン関数
         function resetPlayer() {
             playerCollider.start.copy(startPosition);
             playerCollider.end.copy(startPosition).add(new THREE.Vector3(0, 0.15, 0));
-            playerVelocity.set(0, 0, 0); // 落下速度もゼロに
+            playerVelocity.set(0, 0, 0);
         }
 
         function updatePlayer(deltaTime) {
@@ -138,7 +144,6 @@
 
             playerCollision();
 
-            // ★奈落に落ちたら自動リセット (Yが-25以下になったら)
             if (playerCollider.start.y < -25) {
                 resetPlayer();
             }
@@ -197,8 +202,7 @@
             updatePlayer(deltaTime);
 
             if (playerVisual) {
-                // カメラ追従
-                const offset = new THREE.Vector3(0, 0.3, 0.6); // 少し引いて見やすく
+                const offset = new THREE.Vector3(0, 0.3, 0.6);
                 offset.applyQuaternion(playerVisual.quaternion);
                 offset.add(playerVisual.position);
                 camera.position.lerp(offset, 0.2);
@@ -208,6 +212,7 @@
                 lookAtPos.add(playerVisual.position);
                 camera.lookAt(lookAtPos);
                 
+                // ★修正箇所：ここで spotLight を使ってもエラーにならなくなりました
                 spotLight.position.set(playerVisual.position.x, playerVisual.position.y + 2, playerVisual.position.z);
                 spotLight.target = playerVisual;
             }
