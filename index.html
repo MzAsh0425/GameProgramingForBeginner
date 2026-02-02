@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Monster World</title>
+    <title>Room Drive</title>
     <style> body { margin: 0; overflow: hidden; } </style>
 </head>
 <body>
@@ -19,143 +19,80 @@
     <script type="module">
         import * as THREE from 'three';
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-        import { Sky } from 'three/addons/objects/Sky.js'; // ★空を作るライブラリを追加
 
-        let model = null; 
+        let player = null; // 操作キャラ（缶）
         const keys = {};  
 
         // 1. シーン設定
         const scene = new THREE.Scene();
-        // 背景色はSkyが上書きするので指定しなくてOK
+        scene.background = new THREE.Color(0x333333); // 部屋がない場所は暗く
 
         // 2. カメラ
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        camera.position.set(0, 5, 10); 
+        camera.position.set(0, 2, 5); 
 
+        // 3. レンダラー
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.shadowMap.enabled = true;
-        // リアルな色味にする設定（トーンマッピング）
+        // 部屋のライト（少し明るめにする）
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        renderer.toneMappingExposure = 0.5;
+        renderer.toneMappingExposure = 1.0; 
         document.body.appendChild(renderer.domElement);
 
-        // --- 3. 環境作り（空と太陽） ---
-        const sky = new Sky();
-        sky.scale.setScalar(450000); // 空を巨大にする
-        scene.add(sky);
+        // 4. ライト（室内用に調整）
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.8); // 全体を明るく
+        scene.add(ambientLight);
 
-        const sun = new THREE.Vector3();
-
-        // 空の見た目を調整する関数
-        const effectController = {
-            turbidity: 10,  // 濁り
-            rayleigh: 3,    // 散乱（夕焼け具合）
-            mieCoefficient: 0.005,
-            mieDirectionalG: 0.7,
-            elevation: 2,   // 太陽の高さ（低いと夕方）
-            azimuth: 180,   // 太陽の方角
-            exposure: renderer.toneMappingExposure
-        };
-
-        function updateSun() {
-            const uniforms = sky.material.uniforms;
-            uniforms['turbidity'].value = effectController.turbidity;
-            uniforms['rayleigh'].value = effectController.rayleigh;
-            uniforms['mieCoefficient'].value = effectController.mieCoefficient;
-            uniforms['mieDirectionalG'].value = effectController.mieDirectionalG;
-
-            const phi = THREE.MathUtils.degToRad(90 - effectController.elevation);
-            const theta = THREE.MathUtils.degToRad(effectController.azimuth);
-
-            sun.setFromSphericalCoords(1, phi, theta);
-
-            uniforms['sunPosition'].value.copy(sun);
-            renderer.toneMappingExposure = effectController.exposure;
-            
-            // 太陽の位置に合わせてライトも動かす
-            dirLight.position.copy(sun).multiplyScalar(10);
-        }
-
-        // --- 4. 床と障害物 ---
-        // 床（少し暗めのアスファルト風）
-        const plane = new THREE.Mesh(
-            new THREE.PlaneGeometry(500, 500), 
-            new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.8 })
-        );
-        plane.rotation.x = -Math.PI / 2;
-        plane.receiveShadow = true;
-        scene.add(plane);
-        
-        // グリッド（薄く表示）
-        const grid = new THREE.GridHelper(500, 100, 0x555555, 0x444444);
-        scene.add(grid);
-
-        // ランダムなビル（ただの箱）を配置して広さを演出
-        const boxGeo = new THREE.BoxGeometry(1, 1, 1);
-        const boxMat = new THREE.MeshStandardMaterial({ color: 0x888888 });
-        
-        for (let i = 0; i < 50; i++) {
-            const box = new THREE.Mesh(boxGeo, boxMat);
-            // ランダムな位置（中央付近は空ける）
-            const x = (Math.random() - 0.5) * 200;
-            const z = (Math.random() - 0.5) * 200;
-            if (Math.abs(x) < 10 && Math.abs(z) < 10) continue; // スタート地点には置かない
-
-            box.position.set(x, 0, z);
-            
-            // ランダムな大きさ（ビルっぽく）
-            const h = Math.random() * 10 + 2; // 高さ2〜12m
-            box.scale.set(Math.random() * 5 + 2, h, Math.random() * 5 + 2);
-            box.position.y = h / 2; // 地面に接するように持ち上げる
-            
-            box.castShadow = true;
-            box.receiveShadow = true;
-            scene.add(box);
-        }
-
-        // 5. ライト（太陽光）
-        const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+        dirLight.position.set(5, 10, 7);
         dirLight.castShadow = true;
-        dirLight.shadow.mapSize.width = 2048; // 影をきれいに
-        dirLight.shadow.mapSize.height = 2048;
-        dirLight.shadow.camera.top = 50;
-        dirLight.shadow.camera.bottom = -50;
-        dirLight.shadow.camera.left = -50;
-        dirLight.shadow.camera.right = 50;
         scene.add(dirLight);
-        scene.add(new THREE.AmbientLight(0x404040));
 
-        // 空の初期化実行
-        updateSun();
-
-        // 6. モデル読み込み
         const loader = new GLTFLoader();
+
+        // --- 5. 【ステージ】部屋の読み込み ---
+        // ★ここにスキャンした部屋のファイル名を入れてください
+        loader.load('models/Love_inn.glb', (gltf) => {
+            const room = gltf.scene;
+            scene.add(room);
+            
+            // 部屋は影を受ける側
+            room.traverse((n) => { 
+                if(n.isMesh) {
+                    n.receiveShadow = true; 
+                    n.castShadow = true; // 家具の影も落とす
+                }
+            });
+
+            // 位置調整（必要なら）
+            room.position.y = 0; 
+            // サイズ調整（Scaniverseは実寸なので1倍でOKだが、大きすぎたら調整）
+            room.scale.set(1, 1, 1); 
+
+        }, undefined, (e) => console.error('部屋エラー:', e));
+
+
+        // --- 6. 【プレイヤー】モンスターエナジーの読み込み ---
         loader.load('models/MONSTER_ENERGIE.glb', (gltf) => { 
-            model = gltf.scene; 
-            scene.add(model);
-            model.traverse((n) => { if(n.isMesh) n.castShadow = true; });
+            player = gltf.scene; 
+            scene.add(player);
+            player.traverse((n) => { if(n.isMesh) n.castShadow = true; });
 
-            // 位置とサイズ調整
-            const box = new THREE.Box3().setFromObject(model);
+            // サイズ調整（部屋の中で違和感ないサイズに）
+            // 部屋がリアルサイズ(m)なら、缶は0.3mくらい？
+            // 小さすぎると見えないので、あえて少し大きく「1メートル」くらいにします
+            const box = new THREE.Box3().setFromObject(player);
             const size = box.getSize(new THREE.Vector3());
-            const center = box.getCenter(new THREE.Vector3());
-            
-            model.position.x += (model.position.x - center.x);
-            model.position.y += (model.position.y - center.y);
-            model.position.z += (model.position.z - center.z);
-            
-            const scale = 3 / size.y; 
-            model.scale.set(scale, scale, scale);
+            const scale = 1.0 / size.y; // 高さ1mにする
+            player.scale.set(scale, scale, scale);
 
-            const box2 = new THREE.Box3().setFromObject(model);
-            model.position.y -= box2.min.y;
+            // 初期位置（少し浮かす）
+            player.position.set(0, 0.5, 0);
 
-        }, undefined, (error) => {
-            console.error(error);
-        });
+        }, undefined, (e) => console.error('プレイヤーエラー:', e));
 
-        // キー操作設定
+        // キー操作
         document.addEventListener('keydown', (e) => keys[e.key] = true);
         document.addEventListener('keyup', (e) => keys[e.key] = false);
 
@@ -163,28 +100,28 @@
         function animate() {
             requestAnimationFrame(animate);
 
-            if (model) {
-                const moveSpeed = 0.2; 
-                const rotateSpeed = 0.04;
+            if (player) {
+                const moveSpeed = 0.1; // 室内なので少しゆっくりに
+                const rotateSpeed = 0.05;
 
-                if (keys['a'] || keys['A']) model.rotation.y += rotateSpeed; 
-                if (keys['d'] || keys['D']) model.rotation.y -= rotateSpeed; 
+                if (keys['a'] || keys['A']) player.rotation.y += rotateSpeed; 
+                if (keys['d'] || keys['D']) player.rotation.y -= rotateSpeed; 
 
                 if (keys['w'] || keys['W']) {
-                    model.position.x -= Math.sin(model.rotation.y) * moveSpeed;
-                    model.position.z -= Math.cos(model.rotation.y) * moveSpeed;
+                    player.position.x -= Math.sin(player.rotation.y) * moveSpeed;
+                    player.position.z -= Math.cos(player.rotation.y) * moveSpeed;
                 }
                 if (keys['s'] || keys['S']) {
-                    model.position.x += Math.sin(model.rotation.y) * moveSpeed;
-                    model.position.z += Math.cos(model.rotation.y) * moveSpeed;
+                    player.position.x += Math.sin(player.rotation.y) * moveSpeed;
+                    player.position.z += Math.cos(player.rotation.y) * moveSpeed;
                 }
 
-                // 追従カメラ
-                const offset = new THREE.Vector3(0, 4, 8); 
-                offset.applyQuaternion(model.quaternion);
-                offset.add(model.position);
+                // カメラ追従（距離を近めに設定）
+                const offset = new THREE.Vector3(0, 2, 4); // 高さ2m, 後ろ4m
+                offset.applyQuaternion(player.quaternion);
+                offset.add(player.position);
                 camera.position.lerp(offset, 0.1);
-                camera.lookAt(model.position.x, model.position.y + 2, model.position.z);
+                camera.lookAt(player.position.x, player.position.y + 1, player.position.z);
             }
 
             renderer.render(scene, camera);
