@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Monster Drive</title>
+    <title>Monster Drive Final</title>
     <style> body { margin: 0; overflow: hidden; } </style>
 </head>
 <body>
@@ -23,79 +23,66 @@
         let model = null; 
         const keys = {};  
 
-        // 1. シーンと背景
+        // 1. シーン設定
         const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x87CEEB); // 空色
-        scene.fog = new THREE.Fog(0x87CEEB, 10, 50);  // 遠くを霞ませる
+        scene.background = new THREE.Color(0x87CEEB); 
+        scene.fog = new THREE.Fog(0x87CEEB, 10, 100); // 霧を少し奥にしました
 
-        // 2. カメラ
+        // 2. カメラ（初期位置を安全な場所に）
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        
-        // 3. レンダラー
+        camera.position.set(0, 5, 10); 
+
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.shadowMap.enabled = true; // 影を有効化
+        renderer.shadowMap.enabled = true;
         document.body.appendChild(renderer.domElement);
 
-        // 4. 床（地面）とグリッド
-        const plane = new THREE.Mesh(
-            new THREE.PlaneGeometry(200, 200),
-            new THREE.MeshStandardMaterial({ color: 0xdddddd })
-        );
-        plane.rotation.x = -Math.PI / 2; // 寝かせる
-        plane.receiveShadow = true;      // 影を受ける
+        // 床とグリッド
+        const plane = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.MeshStandardMaterial({ color: 0xdddddd }));
+        plane.rotation.x = -Math.PI / 2;
+        plane.receiveShadow = true;
         scene.add(plane);
-        
-        scene.add(new THREE.GridHelper(200, 200)); // マス目
+        scene.add(new THREE.GridHelper(200, 200));
 
-        // 5. ライト
         const light = new THREE.DirectionalLight(0xffffff, 1.2);
         light.position.set(5, 10, 7);
         light.castShadow = true;
         scene.add(light);
         scene.add(new THREE.AmbientLight(0x606060));
 
-        // 6. モデル読み込み
+        // 3. モデル読み込み
         const loader = new GLTFLoader();
-        // ★ここに正しいファイル名（MONSTER_ENERGIE.glb）が入っています
+        // ★ファイル名の確認をお願いします
         loader.load('models/MONSTER_ENERGIE.glb', (gltf) => { 
             model = gltf.scene; 
             scene.add(model);
-
-            // 影を落とす
+            
             model.traverse((n) => { if(n.isMesh) n.castShadow = true; });
 
-            // --- ここが修正ポイント：完璧な着地 ---
-            
-            // ① まずバウンディングボックス（枠）を計算
+            // 位置合わせ
             const box = new THREE.Box3().setFromObject(model);
             const size = box.getSize(new THREE.Vector3());
             const center = box.getCenter(new THREE.Vector3());
 
-            // ② 中心を原点(0,0,0)に一旦持ってくる
             model.position.x += (model.position.x - center.x);
             model.position.y += (model.position.y - center.y);
             model.position.z += (model.position.z - center.z);
 
-            // ③ サイズを「高さ3メートル」くらいに統一
             const scale = 3 / size.y; 
             model.scale.set(scale, scale, scale);
 
-            // ④ 【重要】足元を地面(Y=0)に合わせる
-            // スケール変更後のボックスを再計算
+            // 再計算して着地
             const box2 = new THREE.Box3().setFromObject(model);
-            // 「一番低い位置(min.y)」を引くことで、底面が0になる
             model.position.y -= box2.min.y;
 
         }, undefined, (error) => {
             console.error(error);
         });
 
-        // キー操作
         document.addEventListener('keydown', (e) => keys[e.key] = true);
         document.addEventListener('keyup', (e) => keys[e.key] = false);
 
-        // 7. アニメーションループ
+        // 4. アニメーション
         function animate() {
             requestAnimationFrame(animate);
 
@@ -103,11 +90,9 @@
                 const moveSpeed = 0.15; 
                 const rotateSpeed = 0.05;
 
-                // 旋回（A/D）
                 if (keys['a'] || keys['A']) model.rotation.y += rotateSpeed; 
                 if (keys['d'] || keys['D']) model.rotation.y -= rotateSpeed; 
 
-                // 前進・後退（W/S）
                 if (keys['w'] || keys['W']) {
                     model.position.x -= Math.sin(model.rotation.y) * moveSpeed;
                     model.position.z -= Math.cos(model.rotation.y) * moveSpeed;
@@ -117,14 +102,23 @@
                     model.position.z += Math.cos(model.rotation.y) * moveSpeed;
                 }
 
-                // カメラ追従（TPS視点）
-                // モデルの後ろ(0, 4, 8)の位置にカメラを持ってくる
-                const relativeOffset = new THREE.Vector3(0, 4, 8); 
-                const cameraOffset = relativeOffset.applyMatrix4(model.matrixWorld);
+                // --- 修正版カメラ追従ロジック ---
+                // モデルの「回転」だけを計算に使う（スケールは無視）
+                
+                // 1. カメラが居てほしい場所（モデルから見て 後ろ8m, 高さ4m）
+                const offset = new THREE.Vector3(0, 4, 8); 
+                
+                // 2. その場所をモデルの向きに合わせて回転させる
+                offset.applyQuaternion(model.quaternion);
+                
+                // 3. モデルの現在位置に足す
+                offset.add(model.position);
 
-                // 滑らかに追従（線形補間）
-                camera.position.lerp(cameraOffset, 0.1);
-                camera.lookAt(model.position.x, model.position.y + 1, model.position.z);
+                // 4. カメラをそこに移動
+                camera.position.lerp(offset, 0.1);
+                
+                // 5. カメラはモデルを見る（少し上を見るように調整）
+                camera.lookAt(model.position.x, model.position.y + 2, model.position.z);
             }
 
             renderer.render(scene, camera);
