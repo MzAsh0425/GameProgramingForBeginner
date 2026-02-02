@@ -37,9 +37,6 @@
         light.position.set(1, 1, 1).normalize();
         scene.add(light);
         scene.add(new THREE.AmbientLight(0x404040));
-        // テスト用の赤い箱を追加
-        const testBox = new THREE.Mesh(new THREE.BoxGeometry(1,1,1), new THREE.MeshBasicMaterial({color: 0xff0000}));
-        scene.add(testBox);
 
         // 4. マウス操作を可能にする
         const controls = new OrbitControls(camera, renderer.domElement);
