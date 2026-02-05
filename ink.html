@@ -24,9 +24,9 @@
 <body>
     <div id="crosshair"></div>
     <div id="info">
-        <b>Lab.glb 対応版</b><br>
+        <b>大学よごしゲーム</b><br>
         クリックで開始 / ESCで中断<br>
-        読み込みに時間がかかる場合があります
+        前進:W 後退:S 視点:マウス 発射:クリック<br>
     </div>
     
     <script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
@@ -255,13 +255,13 @@
         function getForwardVector() {
             const v = new THREE.Vector3();
             v.set(Math.sin(cameraRotation.y), 0, Math.cos(cameraRotation.y));
-            return v.normalize().negate(); 
+            return v.normalize(); 
         }
         function getSideVector() {
             const v = new THREE.Vector3();
             v.set(Math.sin(cameraRotation.y), 0, Math.cos(cameraRotation.y));
             v.cross(THREE.Object3D.DefaultUp); 
-            return v.normalize().negate();
+            return v.normalize();
         }
 
         function controls(deltaTime) {
