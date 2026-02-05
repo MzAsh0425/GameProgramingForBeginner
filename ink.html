@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Splatoon: Mouse Aim</title>
+    <title>Splatoon: Lab Edition</title>
     <style> 
         body { margin: 0; overflow: hidden; } 
         #crosshair {
@@ -24,9 +24,9 @@
 <body>
     <div id="crosshair"></div>
     <div id="info">
-        <b>画面をクリックして操作開始</b><br>
-        マウス: 視点移動 / クリック: インク発射<br>
-        WASD: 移動 / SPACE: ジャンプ / ESC: 中断
+        <b>Lab.glb 対応版</b><br>
+        クリックで開始 / ESCで中断<br>
+        読み込みに時間がかかる場合があります
     </div>
     
     <script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
@@ -42,14 +42,15 @@
     <script type="module">
         import * as THREE from 'three';
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        // ★追加：圧縮ファイルを解凍するためのローダー
+        import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
         import { Octree } from 'three/addons/math/Octree.js';
         import { Capsule } from 'three/addons/math/Capsule.js';
         import { DecalGeometry } from 'three/addons/geometries/DecalGeometry.js';
 
-        // --- マウス操作用の変数 ---
-        let isLocked = false; // マウスがロックされているか
-        let cameraRotation = { x: 0, y: Math.PI }; // カメラの角度（Yは初期向き）
-        const MOUSE_SENSITIVITY = 0.002; // ★ここで回転スピードを微調整できます
+        let isLocked = false; 
+        let cameraRotation = { x: 0, y: Math.PI }; 
+        const MOUSE_SENSITIVITY = 0.002; 
 
         // インク設定
         const decalMaterial = new THREE.MeshPhongMaterial({ 
@@ -106,21 +107,51 @@
         let playerVisual = null;
         const keys = {};
 
+        // --- ★読み込み設定の強化 ---
         const loader = new GLTFLoader();
 
+        // Dracoローダーの設定（解凍機能の準備）
+        const dracoLoader = new DRACOLoader();
+        // 解凍に必要なプログラムをネットから取ってくる設定
+        dracoLoader.setDecoderPath('https://unpkg.com/three@0.150.0/examples/jsm/libs/draco/');
+        loader.setDRACOLoader(dracoLoader);
+
+        // 部屋の読み込み：lab.glb
+        console.log("lab.glb の読み込みを開始します...");
         loader.load('models/lab.glb', (gltf) => {
+            console.log("読み込み成功！");
             roomGroup = gltf.scene;
             scene.add(roomGroup);
+            
             roomGroup.traverse((child) => {
                 if (child.isMesh) {
                     if (!child.geometry.attributes.normal) {
                         child.geometry.computeVertexNormals();
                     }
+                    // 影の設定も念のため
+                    child.receiveShadow = true;
+                    child.castShadow = true;
                 }
             });
             worldOctree.fromGraphNode(roomGroup);
+            
+            // 位置調整（もし部屋が遠すぎたり小さすぎたりする場合用）
+            // 必要に応じてここを調整してください
+            // roomGroup.scale.set(1, 1, 1); 
+            // roomGroup.position.set(0, 0, 0);
+
+        }, 
+        // 進行状況を表示
+        (xhr) => {
+            console.log( ( xhr.loaded / xhr.total * 100 ) + '% loaded' );
+        },
+        // エラー時の表示
+        (error) => {
+            console.error('読み込みエラー発生:', error);
+            alert('モデルの読み込みに失敗しました。ファイル名やパスを確認してください。');
         });
 
+        // プレイヤー読み込み
         loader.load('models/MONSTER_ENERGIE.glb', (gltf) => {
             playerVisual = gltf.scene;
             scene.add(playerVisual);
@@ -129,25 +160,19 @@
             playerVisual.scale.set(scale, scale, scale);
         });
 
-        // --- ★マウスロック機能 ---
+        // --- マウスロック ---
         document.body.addEventListener('click', () => {
             document.body.requestPointerLock();
         });
-
         document.addEventListener('pointerlockchange', () => {
             isLocked = (document.pointerLockElement === document.body);
         });
 
-        // --- ★マウス移動イベント（視点操作） ---
+        // --- 視点操作 ---
         document.addEventListener('mousemove', (event) => {
             if (!isLocked) return;
-
-            // 横回転（Y軸）
             cameraRotation.y -= event.movementX * MOUSE_SENSITIVITY;
-
-            // 縦回転（X軸）※制限付き
             cameraRotation.x -= event.movementY * MOUSE_SENSITIVITY;
-            // 真上・真下を見すぎて首が折れないように制限 (-90度〜90度)
             cameraRotation.x = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, cameraRotation.x));
         });
 
@@ -156,9 +181,8 @@
         const mouseHelper = new THREE.Object3D(); 
 
         document.addEventListener('mousedown', (event) => {
-            if (!isLocked || !roomGroup) return; // ロック中のみ発射
+            if (!isLocked || !roomGroup) return; 
 
-            // 画面中央から発射
             raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
             const intersects = raycaster.intersectObject(roomGroup, true);
 
@@ -228,17 +252,15 @@
             }
         }
 
-        // ★移動方向の計算をカメラ向きに合わせる
         function getForwardVector() {
             const v = new THREE.Vector3();
-            // カメラの向いている水平方向を取得
             v.set(Math.sin(cameraRotation.y), 0, Math.cos(cameraRotation.y));
-            return v.normalize().negate(); // 逆になっていたので反転
+            return v.normalize().negate(); 
         }
         function getSideVector() {
             const v = new THREE.Vector3();
             v.set(Math.sin(cameraRotation.y), 0, Math.cos(cameraRotation.y));
-            v.cross(THREE.Object3D.DefaultUp); // 右方向
+            v.cross(THREE.Object3D.DefaultUp); 
             return v.normalize().negate();
         }
 
@@ -258,21 +280,13 @@
             for(let i=0; i<STEPS; i++){ controls(dt); updatePlayer(dt); }
 
             if (playerVisual) {
-                // 1. プレイヤーの位置更新
                 playerVisual.position.copy(playerCollider.start);
                 playerVisual.position.y -= 0.2; 
-                
-                // 2. プレイヤーの向きをカメラの水平回転に合わせる
-                // (缶は常に正面＝カメラ方向を向く)
                 playerVisual.rotation.y = cameraRotation.y + Math.PI; 
 
-                // 3. カメラ位置の計算 (球座標)
-                // プレイヤーを中心にして、回転角度に応じた位置にカメラを置く
-                const cameraDist = 0.6; // 距離
-                const cameraHeight = 0.3; // 基準の高さ
+                const cameraDist = 0.6;
+                const cameraHeight = 0.3; 
 
-                // カメラのオフセット計算
-                // X軸回転(Pitch)で高さを、Y軸回転(Yaw)で水平位置を決める
                 const offsetX = Math.sin(cameraRotation.y) * cameraDist * Math.cos(cameraRotation.x);
                 const offsetZ = Math.cos(cameraRotation.y) * cameraDist * Math.cos(cameraRotation.x);
                 const offsetY = Math.sin(cameraRotation.x) * cameraDist;
@@ -281,8 +295,6 @@
                 camera.position.z = playerVisual.position.z - offsetZ;
                 camera.position.y = playerVisual.position.y + cameraHeight - offsetY;
 
-                // 4. カメラはプレイヤーの少し先を見る
-                // これにより、常にクロスヘアの中心が狙える
                 camera.lookAt(
                     playerVisual.position.x + offsetX * 10,
                     playerVisual.position.y + cameraHeight + offsetY * 10,
