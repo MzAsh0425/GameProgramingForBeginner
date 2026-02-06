@@ -83,7 +83,7 @@
         // --- 読み込み ---
         const loader = new GLTFLoader();
 
-        loader.load('models/Labo.glb', (gltf) => {
+        loader.load('models/labo.glb', (gltf) => {
             const room = gltf.scene;
             scene.add(room);
             room.traverse((child) => {
